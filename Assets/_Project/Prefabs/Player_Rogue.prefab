@@ -13,6 +13,7 @@ GameObject:
   - component: {fileID: 3196353551188557424}
   - component: {fileID: 3829065719792164336}
   - component: {fileID: 5812066973074402565}
+  - component: {fileID: 8609419366914609255}
   m_Layer: 0
   m_Name: Player_Rogue
   m_TagString: Player
@@ -134,6 +135,25 @@ MonoBehaviour:
   groundCheckOffset: 0.1
   slideAngle: 46
   slideSpeed: 6
+  cameraTransform: {fileID: 0}
+--- !u!114 &8609419366914609255
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1714363361631738553}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 48a52466211ca4af9918b2124f1046ea, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::Wanderer.WeaponController
+  fireRate: 6
+  range: 300
+  hitMask:
+    serializedVersion: 2
+    m_Bits: 4294967295
+  flashTime: 0.04
   cameraTransform: {fileID: 0}
 --- !u!1001 &6169533207023676231
 PrefabInstance:

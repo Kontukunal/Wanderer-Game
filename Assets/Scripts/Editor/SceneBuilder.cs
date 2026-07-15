@@ -22,7 +22,7 @@ namespace Wanderer.EditorTools
         // Which hero to spawn. Swap this one line to change character, then rebuild the scene.
         //   Player_Rogue.prefab — KayKit hooded rogue: Humanoid, full blend tree + jump.
         //   Player_Golu.prefab  — Golu: Generic rig, walk/run clip only, flat colours.
-        private const string PlayerPrefabPath = "Assets/_Project/Prefabs/Player_Golu.prefab";
+        private const string PlayerPrefabPath = "Assets/_Project/Prefabs/Player_Rogue.prefab";
         private const string EnvDir = "Assets/_Project/Env";
         private const string ProfilePath = EnvDir + "/PostProcessProfile.asset";
         private const string SkyMatPath = EnvDir + "/M_Sky_HDRI.mat";
@@ -42,6 +42,9 @@ namespace Wanderer.EditorTools
             var sun = BuildLighting();
             BuildSky();
             BuildPostProcessing();
+            BuildTrainingGround(terrain);   // flattens the centre before props/player land on it
+            BuildHunt(terrain);             // the sheep to hunt + the score manager
+            new GameObject("GameHUD").AddComponent<Wanderer.GameHUD>();
             var player = PlacePlayer(terrain);
             BuildCamera(player);
             DressScene(terrain);
@@ -379,16 +382,8 @@ namespace Wanderer.EditorTools
             // Low slab shelf on the mid-buttress — leads the eye up toward the cliff.
             PlaceHero(root, terrain, "coast_land_rocks_02", new Vector3(-4f, 0f, 46f), 1.6f, 0.6f, 22f);
 
-            // --- trees: photoscans, so few and deliberate. These are the silhouettes. ---
-            // These photoscans are ~1.6M triangles each, but they now carry generated LOD
-            // chains that the GPU Resident Drawer actually honours, so distant ones collapse
-            // to a fraction of that. Keep them as hero silhouettes rather than forest fill.
-            // Full-detail photoscanned trees. Expensive (~1.6M tris each) but they ARE the
-            // look of the place — the density is deliberate, not accidental.
-            ScatterCluster(root, terrain, "island_tree_01", new Vector2( 46f, -12f), 22f, 4, 1.3f, 1.9f, maxSlope: 30f);
-            ScatterCluster(root, terrain, "island_tree_01", new Vector2(-52f,  10f), 20f, 3, 1.2f, 1.8f, maxSlope: 30f);
-            ScatterCluster(root, terrain, "island_tree_02", new Vector2(-14f, -46f), 24f, 4, 1.3f, 2.0f, maxSlope: 30f);
-            ScatterCluster(root, terrain, "island_tree_02", new Vector2( 68f,  34f), 22f, 3, 1.2f, 1.7f, maxSlope: 30f);
+            // --- trees: intentionally none. The standing island trees were removed so the
+            //     skyline reads on rock and terrain alone. ---
 
             // --- rock: scattered widely, bedded into slope breaks ---
             // Boulders are cheap (66k tris) so they carry the density and do most of the work
@@ -407,6 +402,299 @@ namespace Wanderer.EditorTools
             ScatterCluster(root, terrain, "grass_medium_01", new Vector2( 20f, -55f), 60f, 420, 0.8f, 1.8f, maxSlope: 28f);
             ScatterCluster(root, terrain, "grass_medium_01", new Vector2(-30f,  15f), 75f, 380, 0.7f, 1.6f, maxSlope: 28f);
             ScatterCluster(root, terrain, "grass_medium_01", new Vector2( 60f,  40f), 60f, 260, 0.7f, 1.5f, maxSlope: 28f);
+        }
+
+        // ---------------------------------------------------------------- training ground
+
+        private static readonly Vector2 GroundCenter = new Vector2(20f, -60f);   // == player spawn
+        private const float GroundRadius = 14f;
+
+        /// <summary>
+        /// Flattens a disc of terrain at the centre and builds the shooting range on it:
+        /// a table with the gun on top, and a target 12m downrange for the player to fire at.
+        /// Flattening first means the table and target sit level and the player spawns clear.
+        /// </summary>
+        private static void BuildTrainingGround(Terrain terrain)
+        {
+            FlattenTerrainDisc(terrain, GroundCenter, GroundRadius);
+
+            var root = new GameObject("TrainingGround").transform;
+            float groundY = terrain.SampleHeight(new Vector3(GroundCenter.x, 0f, GroundCenter.y));
+
+            // Table right in front of spawn so the gun is grab-able immediately.
+            var tablePos = new Vector3(GroundCenter.x + 1.2f, groundY, GroundCenter.y + 1.0f);
+            var table = BuildTable(root, tablePos);
+
+            // Gun on the tabletop, ready to pick up.
+            BuildGunPickup(root, new Vector3(tablePos.x, tablePos.y + 0.92f, tablePos.z), -25f);
+
+            // Target 12m north (downrange), facing back toward the player.
+            BuildTarget(root, new Vector3(GroundCenter.x, groundY, GroundCenter.y + 12f));
+        }
+
+        // ---------------------------------------------------------------- the hunt
+
+        private const int SheepCount = 4;
+
+        /// <summary>
+        /// Drops the score manager and a small flock of sheep around the range. The manager owns
+        /// the arena (centre + radius) that the sheep wander inside and respawn into.
+        /// </summary>
+        private static void BuildHunt(Terrain terrain)
+        {
+            var mgrGo = new GameObject("HuntManager");
+            var mgr = mgrGo.AddComponent<Wanderer.HuntManager>();
+            var so = new SerializedObject(mgr);
+            so.FindProperty("terrain").objectReferenceValue = terrain;
+            // Arena centred just downrange of spawn so the flock is out in front of the player.
+            so.FindProperty("arenaCenter").vector2Value = new Vector2(GroundCenter.x, GroundCenter.y + 8f);
+            so.FindProperty("arenaRadius").floatValue = 26f;
+            so.ApplyModifiedProperties();
+
+            var flock = new GameObject("Flock").transform;
+            for (int i = 0; i < SheepCount; i++)
+            {
+                // spread the initial flock across the arena, clear of the player's feet
+                var c = new Vector2(GroundCenter.x, GroundCenter.y + 8f);
+                float a = (i / (float)SheepCount) * Mathf.PI * 2f;
+                float r = Random.Range(8f, 22f);
+                var p = new Vector3(c.x + Mathf.Cos(a) * r, 0f, c.y + Mathf.Sin(a) * r);
+                p.y = terrain.SampleHeight(p);
+                BuildSheep(flock, p, Random.value * 360f);
+            }
+        }
+
+        private static readonly Color WoolColor = new Color(0.92f, 0.91f, 0.88f);
+        private static readonly Color SheepDark = new Color(0.16f, 0.15f, 0.15f);
+
+        /// <summary>A sheep built from primitives: a woolly body on four legs with a dark head.</summary>
+        private static void BuildSheep(Transform parent, Vector3 pos, float yaw)
+        {
+            var sheep = new GameObject("Sheep");
+            sheep.transform.SetParent(parent, false);
+            sheep.transform.position = pos;
+            sheep.transform.rotation = Quaternion.Euler(0f, yaw, 0f);
+
+            var wool = FlatMat("Wool", WoolColor, 0.05f);
+            var dark = FlatMat("SheepDark", SheepDark, 0.2f);
+
+            // body: a fat woolly ellipsoid sitting at leg height (sheep faces +Z)
+            var body = GameObject.CreatePrimitive(PrimitiveType.Sphere);
+            body.name = "Body";
+            body.transform.SetParent(sheep.transform, false);
+            body.transform.localPosition = new Vector3(0f, 0.62f, 0f);
+            body.transform.localScale = new Vector3(0.9f, 0.78f, 1.25f);
+            body.GetComponent<Renderer>().sharedMaterial = wool;
+            Object.DestroyImmediate(body.GetComponent<Collider>());
+            var bodyRenderer = body.GetComponent<Renderer>();
+
+            // head: dark, low and forward
+            var head = GameObject.CreatePrimitive(PrimitiveType.Sphere);
+            head.name = "Head";
+            head.transform.SetParent(sheep.transform, false);
+            head.transform.localPosition = new Vector3(0f, 0.66f, 0.72f);
+            head.transform.localScale = new Vector3(0.34f, 0.4f, 0.44f);
+            head.GetComponent<Renderer>().sharedMaterial = dark;
+            Object.DestroyImmediate(head.GetComponent<Collider>());
+
+            // ears
+            foreach (float ex in new[] { -0.18f, 0.18f })
+            {
+                var ear = GameObject.CreatePrimitive(PrimitiveType.Sphere);
+                ear.name = "Ear";
+                ear.transform.SetParent(sheep.transform, false);
+                ear.transform.localPosition = new Vector3(ex, 0.8f, 0.66f);
+                ear.transform.localScale = new Vector3(0.16f, 0.08f, 0.1f);
+                ear.GetComponent<Renderer>().sharedMaterial = dark;
+                Object.DestroyImmediate(ear.GetComponent<Collider>());
+            }
+
+            // four legs
+            foreach (var c in new[] { new Vector2(0.28f, 0.42f), new Vector2(-0.28f, 0.42f),
+                                      new Vector2(0.28f, -0.42f), new Vector2(-0.28f, -0.42f) })
+            {
+                var leg = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
+                leg.name = "Leg";
+                leg.transform.SetParent(sheep.transform, false);
+                leg.transform.localPosition = new Vector3(c.x, 0.22f, c.y);
+                leg.transform.localScale = new Vector3(0.1f, 0.22f, 0.1f);
+                leg.GetComponent<Renderer>().sharedMaterial = dark;
+                Object.DestroyImmediate(leg.GetComponent<Collider>());
+            }
+
+            // one capsule collider over the whole animal for shots (and to block the player)
+            var col = sheep.AddComponent<CapsuleCollider>();
+            col.direction = 2;                 // Z — along the body
+            col.center = new Vector3(0f, 0.6f, 0f);
+            col.radius = 0.5f;
+            col.height = 1.5f;
+
+            var s = sheep.AddComponent<Wanderer.Sheep>();
+            var so = new SerializedObject(s);
+            so.FindProperty("bodyRenderer").objectReferenceValue = bodyRenderer;
+            so.ApplyModifiedProperties();
+        }
+
+        /// <summary>Levels a circle of terrain to its centre height, with a soft rim so it blends.</summary>
+        private static void FlattenTerrainDisc(Terrain terrain, Vector2 worldCenter, float radius)
+        {
+            var data = terrain.terrainData;
+            int res = data.heightmapResolution;
+            Vector3 size = data.size;
+            Vector3 tPos = terrain.transform.position;
+
+            // world -> normalised terrain coords
+            float cx = (worldCenter.x - tPos.x) / size.x;
+            float cz = (worldCenter.y - tPos.z) / size.z;
+            float targetH = data.GetInterpolatedHeight(cx, cz) / size.y;   // normalised height to flatten to
+
+            float rNorm = radius / size.x;
+            int minX = Mathf.Clamp(Mathf.FloorToInt((cx - rNorm * 1.6f) * res), 0, res - 1);
+            int maxX = Mathf.Clamp(Mathf.CeilToInt((cx + rNorm * 1.6f) * res), 0, res - 1);
+            int minZ = Mathf.Clamp(Mathf.FloorToInt((cz - rNorm * 1.6f) * res), 0, res - 1);
+            int maxZ = Mathf.Clamp(Mathf.CeilToInt((cz + rNorm * 1.6f) * res), 0, res - 1);
+
+            var heights = data.GetHeights(minX, minZ, maxX - minX + 1, maxZ - minZ + 1);
+            for (int z = minZ; z <= maxZ; z++)
+            {
+                for (int x = minX; x <= maxX; x++)
+                {
+                    float u = x / (float)(res - 1);
+                    float v = z / (float)(res - 1);
+                    float dist = Mathf.Sqrt((u - cx) * (u - cx) + (v - cz) * (v - cz)) / rNorm;
+                    if (dist >= 1.6f) continue;
+
+                    // fully flat inside the radius, smoothly ramping back to natural terrain by 1.6r
+                    float blend = 1f - Mathf.SmoothStep(1f, 1.6f, dist);
+                    float cur = heights[z - minZ, x - minX];
+                    heights[z - minZ, x - minX] = Mathf.Lerp(cur, targetH, blend);
+                }
+            }
+            data.SetHeights(minX, minZ, heights);
+        }
+
+        // ---------------------------------------------------------------- range props
+
+        private static readonly Color WoodDark = new Color(0.32f, 0.22f, 0.13f);
+        private static readonly Color WoodLight = new Color(0.55f, 0.40f, 0.24f);
+
+        private static Material FlatMat(string name, Color c, float smoothness = 0.15f)
+        {
+            string path = $"Assets/_Project/Weapons/M_{name}.mat";
+            var m = AssetDatabase.LoadAssetAtPath<Material>(path);
+            if (m == null)
+            {
+                m = new Material(Shader.Find("Universal Render Pipeline/Lit"));
+                AssetDatabase.CreateAsset(m, path);
+            }
+            m.SetColor("_BaseColor", c);
+            m.SetFloat("_Smoothness", smoothness);
+            m.SetFloat("_Metallic", 0f);
+            EditorUtility.SetDirty(m);
+            return m;
+        }
+
+        /// <summary>A plain wooden table: a top slab on four legs. Built from boxes, sized for a person.</summary>
+        private static GameObject BuildTable(Transform parent, Vector3 basePos)
+        {
+            var table = new GameObject("RangeTable");
+            table.transform.SetParent(parent, false);
+            table.transform.position = basePos;
+
+            var topMat = FlatMat("TableTop", WoodLight);
+            var legMat = FlatMat("TableLeg", WoodDark);
+
+            const float w = 1.4f, d = 0.8f, h = 0.9f, thick = 0.08f, leg = 0.09f;
+
+            var top = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            top.name = "Top";
+            top.transform.SetParent(table.transform, false);
+            top.transform.localPosition = new Vector3(0f, h, 0f);
+            top.transform.localScale = new Vector3(w, thick, d);
+            top.GetComponent<Renderer>().sharedMaterial = topMat;
+
+            float lx = w * 0.5f - leg, lz = d * 0.5f - leg;
+            var corners = new[] { new Vector2(lx, lz), new Vector2(-lx, lz), new Vector2(lx, -lz), new Vector2(-lx, -lz) };
+            foreach (var c in corners)
+            {
+                var l = GameObject.CreatePrimitive(PrimitiveType.Cube);
+                l.name = "Leg";
+                l.transform.SetParent(table.transform, false);
+                l.transform.localPosition = new Vector3(c.x, (h - thick * 0.5f) * 0.5f, c.y);
+                l.transform.localScale = new Vector3(leg, h - thick, leg);
+                l.GetComponent<Renderer>().sharedMaterial = legMat;
+            }
+            return table;
+        }
+
+        /// <summary>The pickup: the Kenney blaster with a GunPickup trigger the player walks into.</summary>
+        private static void BuildGunPickup(Transform parent, Vector3 pos, float yaw)
+        {
+            var src = AssetDatabase.LoadAssetAtPath<GameObject>("Assets/_Project/Weapons/blaster-b.fbx");
+            if (src == null) { Debug.LogWarning("[Wanderer] blaster-b.fbx missing"); return; }
+
+            var gun = (GameObject)PrefabUtility.InstantiatePrefab(src);
+            gun.name = "GunPickup";
+            gun.transform.SetParent(parent, false);
+            gun.transform.position = pos;
+            gun.transform.rotation = Quaternion.Euler(0f, yaw, 0f);
+            gun.transform.localScale = Vector3.one;
+
+            var mat = FlatMat("Blaster", new Color(0.20f, 0.22f, 0.26f), 0.55f);
+            foreach (var r in gun.GetComponentsInChildren<Renderer>()) r.sharedMaterial = mat;
+
+            // a trigger so the player can detect and pick it up
+            var trigger = gun.AddComponent<SphereCollider>();
+            trigger.isTrigger = true;
+            trigger.radius = 1.6f;
+            gun.AddComponent<Wanderer.GunPickup>();
+            gun.tag = "Untagged";
+        }
+
+        /// <summary>A round shooting target: concentric rings on a post, facing the player.</summary>
+        private static void BuildTarget(Transform parent, Vector3 pos)
+        {
+            var target = new GameObject("Target");
+            target.transform.SetParent(parent, false);
+            target.transform.position = pos;
+            target.transform.rotation = Quaternion.Euler(0f, 180f, 0f);   // face back toward spawn
+
+            // post
+            var post = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
+            post.name = "Post";
+            post.transform.SetParent(target.transform, false);
+            post.transform.localPosition = new Vector3(0f, 0.75f, 0f);
+            post.transform.localScale = new Vector3(0.12f, 0.75f, 0.12f);
+            post.GetComponent<Renderer>().sharedMaterial = FlatMat("TargetPost", WoodDark);
+
+            // face: stacked discs from large (outer) to small (bull), each slightly proud of the last
+            var ringColors = new[] {
+                new Color(0.95f, 0.95f, 0.92f),  // white
+                new Color(0.15f, 0.35f, 0.75f),  // blue
+                new Color(0.90f, 0.20f, 0.20f),  // red
+                new Color(0.98f, 0.85f, 0.20f),  // yellow bull
+            };
+            float[] radii = { 0.5f, 0.36f, 0.22f, 0.10f };
+            var face = new GameObject("Face");
+            face.transform.SetParent(target.transform, false);
+            face.transform.localPosition = new Vector3(0f, 1.7f, 0f);
+            for (int i = 0; i < radii.Length; i++)
+            {
+                var ring = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
+                ring.name = i == radii.Length - 1 ? "Bull" : "Ring" + i;
+                ring.transform.SetParent(face.transform, false);
+                ring.transform.localRotation = Quaternion.Euler(90f, 0f, 0f);   // flat disc facing forward
+                ring.transform.localPosition = new Vector3(0f, 0f, i * 0.012f);
+                ring.transform.localScale = new Vector3(radii[i] * 2f, 0.02f, radii[i] * 2f);
+                ring.GetComponent<Renderer>().sharedMaterial = FlatMat("TargetRing" + i, ringColors[i]);
+                Object.DestroyImmediate(ring.GetComponent<Collider>());   // one collider on the parent instead
+            }
+
+            // single box collider over the whole face so raycasts register a "hit"
+            var hit = target.AddComponent<BoxCollider>();
+            hit.center = new Vector3(0f, 1.7f, 0f);
+            hit.size = new Vector3(1.1f, 1.1f, 0.15f);
+            target.AddComponent<Wanderer.ShootingTarget>();
         }
 
         private static GameObject LoadModel(string slug) =>
@@ -472,8 +760,11 @@ namespace Wanderer.EditorTools
             // model ends up on its head or microscopic.
             go.transform.rotation = Quaternion.Euler(0f, yaw, 0f) * src.transform.rotation;
             go.transform.localScale = Vector3.Scale(src.transform.localScale, Vector3.one * scale);
-            GroundObject(go, terrain, pos, bury);
-            AddCollider(go);
+            GroundObject(go, terrain, pos, bury, seatOnFootprint: !slug.Contains("tree"));
+
+            // Trees get a slim trunk capsule; everything else its mesh collider.
+            if (slug.Contains("tree") && !slug.Contains("dead_tree")) AddTrunkCollider(go);
+            else AddCollider(go);
             // Deliberately NOT ContributeGI: these are million-vert photoscans with no
             // lightmap UVs (unwrapping them fails and takes forever). They read ambient
             // from the HDRI + light probes, which for a dynamic sun is the right call anyway.
