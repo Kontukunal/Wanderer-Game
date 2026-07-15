@@ -43,6 +43,7 @@ namespace Wanderer.EditorTools
             BuildSky();
             BuildPostProcessing();
             BuildTrainingGround(terrain);   // flattens the centre before props/player land on it
+            BuildHunt(terrain);             // the sheep to hunt + the score manager
             new GameObject("GameHUD").AddComponent<Wanderer.GameHUD>();
             var player = PlacePlayer(terrain);
             BuildCamera(player);
@@ -381,15 +382,8 @@ namespace Wanderer.EditorTools
             // Low slab shelf on the mid-buttress — leads the eye up toward the cliff.
             PlaceHero(root, terrain, "coast_land_rocks_02", new Vector3(-4f, 0f, 46f), 1.6f, 0.6f, 22f);
 
-            // --- trees: photoscans, so few and deliberate. These are the silhouettes. ---
-            // These photoscans are ~1.6M triangles each, but they now carry generated LOD
-            // chains that the GPU Resident Drawer actually honours, so distant ones collapse
-            // to a fraction of that. Keep them as hero silhouettes rather than forest fill.
-            // Exactly three trees — hand-placed as framing silhouettes, kept clear of the
-            // central training ground so they never block the shooting sightline.
-            PlaceHero(root, terrain, "island_tree_01", new Vector3(-48f, 0f, 30f),  1.7f, 0.05f, 40f);
-            PlaceHero(root, terrain, "island_tree_02", new Vector3( 58f, 0f, -20f), 1.8f, 0.05f, 200f);
-            PlaceHero(root, terrain, "island_tree_01", new Vector3( 30f, 0f, 62f),  1.6f, 0.05f, 120f);
+            // --- trees: intentionally none. The standing island trees were removed so the
+            //     skyline reads on rock and terrain alone. ---
 
             // --- rock: scattered widely, bedded into slope breaks ---
             // Boulders are cheap (66k tris) so they carry the density and do most of the work
@@ -436,6 +430,109 @@ namespace Wanderer.EditorTools
 
             // Target 12m north (downrange), facing back toward the player.
             BuildTarget(root, new Vector3(GroundCenter.x, groundY, GroundCenter.y + 12f));
+        }
+
+        // ---------------------------------------------------------------- the hunt
+
+        private const int SheepCount = 4;
+
+        /// <summary>
+        /// Drops the score manager and a small flock of sheep around the range. The manager owns
+        /// the arena (centre + radius) that the sheep wander inside and respawn into.
+        /// </summary>
+        private static void BuildHunt(Terrain terrain)
+        {
+            var mgrGo = new GameObject("HuntManager");
+            var mgr = mgrGo.AddComponent<Wanderer.HuntManager>();
+            var so = new SerializedObject(mgr);
+            so.FindProperty("terrain").objectReferenceValue = terrain;
+            // Arena centred just downrange of spawn so the flock is out in front of the player.
+            so.FindProperty("arenaCenter").vector2Value = new Vector2(GroundCenter.x, GroundCenter.y + 8f);
+            so.FindProperty("arenaRadius").floatValue = 26f;
+            so.ApplyModifiedProperties();
+
+            var flock = new GameObject("Flock").transform;
+            for (int i = 0; i < SheepCount; i++)
+            {
+                // spread the initial flock across the arena, clear of the player's feet
+                var c = new Vector2(GroundCenter.x, GroundCenter.y + 8f);
+                float a = (i / (float)SheepCount) * Mathf.PI * 2f;
+                float r = Random.Range(8f, 22f);
+                var p = new Vector3(c.x + Mathf.Cos(a) * r, 0f, c.y + Mathf.Sin(a) * r);
+                p.y = terrain.SampleHeight(p);
+                BuildSheep(flock, p, Random.value * 360f);
+            }
+        }
+
+        private static readonly Color WoolColor = new Color(0.92f, 0.91f, 0.88f);
+        private static readonly Color SheepDark = new Color(0.16f, 0.15f, 0.15f);
+
+        /// <summary>A sheep built from primitives: a woolly body on four legs with a dark head.</summary>
+        private static void BuildSheep(Transform parent, Vector3 pos, float yaw)
+        {
+            var sheep = new GameObject("Sheep");
+            sheep.transform.SetParent(parent, false);
+            sheep.transform.position = pos;
+            sheep.transform.rotation = Quaternion.Euler(0f, yaw, 0f);
+
+            var wool = FlatMat("Wool", WoolColor, 0.05f);
+            var dark = FlatMat("SheepDark", SheepDark, 0.2f);
+
+            // body: a fat woolly ellipsoid sitting at leg height (sheep faces +Z)
+            var body = GameObject.CreatePrimitive(PrimitiveType.Sphere);
+            body.name = "Body";
+            body.transform.SetParent(sheep.transform, false);
+            body.transform.localPosition = new Vector3(0f, 0.62f, 0f);
+            body.transform.localScale = new Vector3(0.9f, 0.78f, 1.25f);
+            body.GetComponent<Renderer>().sharedMaterial = wool;
+            Object.DestroyImmediate(body.GetComponent<Collider>());
+            var bodyRenderer = body.GetComponent<Renderer>();
+
+            // head: dark, low and forward
+            var head = GameObject.CreatePrimitive(PrimitiveType.Sphere);
+            head.name = "Head";
+            head.transform.SetParent(sheep.transform, false);
+            head.transform.localPosition = new Vector3(0f, 0.66f, 0.72f);
+            head.transform.localScale = new Vector3(0.34f, 0.4f, 0.44f);
+            head.GetComponent<Renderer>().sharedMaterial = dark;
+            Object.DestroyImmediate(head.GetComponent<Collider>());
+
+            // ears
+            foreach (float ex in new[] { -0.18f, 0.18f })
+            {
+                var ear = GameObject.CreatePrimitive(PrimitiveType.Sphere);
+                ear.name = "Ear";
+                ear.transform.SetParent(sheep.transform, false);
+                ear.transform.localPosition = new Vector3(ex, 0.8f, 0.66f);
+                ear.transform.localScale = new Vector3(0.16f, 0.08f, 0.1f);
+                ear.GetComponent<Renderer>().sharedMaterial = dark;
+                Object.DestroyImmediate(ear.GetComponent<Collider>());
+            }
+
+            // four legs
+            foreach (var c in new[] { new Vector2(0.28f, 0.42f), new Vector2(-0.28f, 0.42f),
+                                      new Vector2(0.28f, -0.42f), new Vector2(-0.28f, -0.42f) })
+            {
+                var leg = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
+                leg.name = "Leg";
+                leg.transform.SetParent(sheep.transform, false);
+                leg.transform.localPosition = new Vector3(c.x, 0.22f, c.y);
+                leg.transform.localScale = new Vector3(0.1f, 0.22f, 0.1f);
+                leg.GetComponent<Renderer>().sharedMaterial = dark;
+                Object.DestroyImmediate(leg.GetComponent<Collider>());
+            }
+
+            // one capsule collider over the whole animal for shots (and to block the player)
+            var col = sheep.AddComponent<CapsuleCollider>();
+            col.direction = 2;                 // Z — along the body
+            col.center = new Vector3(0f, 0.6f, 0f);
+            col.radius = 0.5f;
+            col.height = 1.5f;
+
+            var s = sheep.AddComponent<Wanderer.Sheep>();
+            var so = new SerializedObject(s);
+            so.FindProperty("bodyRenderer").objectReferenceValue = bodyRenderer;
+            so.ApplyModifiedProperties();
         }
 
         /// <summary>Levels a circle of terrain to its centre height, with a soft rim so it blends.</summary>

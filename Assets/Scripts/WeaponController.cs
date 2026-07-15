@@ -1,4 +1,6 @@
+using Unity.Cinemachine;
 using UnityEngine;
+using UnityEngine.InputSystem;
 
 namespace Wanderer
 {
@@ -24,17 +26,36 @@ namespace Wanderer
         [Tooltip("How close the player must be to a gun to pick it up with Interact.")]
         [SerializeField] private float pickupRadius = 3.5f;
 
+        [Header("Aim / Scope (hold right mouse or left trigger)")]
+        [Tooltip("Camera field of view when scoped in. Lower = more zoom.")]
+        [SerializeField] private float aimFieldOfView = 28f;
+        [Tooltip("How fast the scope zooms in/out. Higher = snappier.")]
+        [SerializeField] private float aimLerpSpeed = 12f;
+        [Tooltip("Look sensitivity multiplier while scoped, for finer aim.")]
+        [SerializeField, Range(0.1f, 1f)] private float aimSensitivityScale = 0.5f;
+
         [Header("References")]
         [SerializeField] private Transform cameraTransform;
 
         public bool HasGun { get; private set; }
+
+        /// <summary>True while the player is holding the aim button (scoped in).</summary>
         public bool IsAiming { get; private set; }
+
+        /// <summary>0 at the hip, 1 fully scoped — drives the HUD reticle + sensitivity blend.</summary>
+        public float AimBlend { get; private set; }
+
+        /// <summary>Look sensitivity multiplier the CameraRig should apply this frame (1 = normal).</summary>
+        public float LookSensitivityScale => Mathf.Lerp(1f, aimSensitivityScale, AimBlend);
 
         /// <summary>True when an un-picked gun is within pickupRadius (drives the HUD prompt).</summary>
         public bool GunInRange { get; private set; }
 
-        /// <summary>Total shots that have landed on a target.</summary>
+        /// <summary>Total shots that have landed on the practice target.</summary>
         public int TargetHits { get; private set; }
+
+        /// <summary>Time of the last confirmed hit on a sheep — drives the HUD hit-marker flash.</summary>
+        public float LastSheepHitTime { get; private set; } = -99f;
 
         // Exposed for the HUD's debug readout.
         public float DistanceToGun { get; private set; } = -1f;
@@ -53,6 +74,12 @@ namespace Wanderer
         private Light muzzleFlash;
         private float flashOffAt;
 
+        // Scope state: we drive the live vcam's lens FOV and calm its handheld shake while aiming.
+        private CinemachineCamera vcam;
+        private CinemachineBasicMultiChannelPerlin vcamNoise;
+        private float hipFieldOfView;
+        private float baseNoiseAmplitude;
+
         private static readonly int AimingHash = Animator.StringToHash("Aiming");
         private static readonly int ShootHash = Animator.StringToHash("Shoot");
 
@@ -65,6 +92,14 @@ namespace Wanderer
 
             if (animator != null)
                 handBone = animator.GetBoneTransform(HumanBodyBones.RightHand);
+
+            vcam = Object.FindFirstObjectByType<CinemachineCamera>();
+            if (vcam != null)
+            {
+                hipFieldOfView = vcam.Lens.FieldOfView;
+                vcamNoise = vcam.GetComponent<CinemachineBasicMultiChannelPerlin>();
+                if (vcamNoise != null) baseNoiseAmplitude = vcamNoise.AmplitudeGain;
+            }
         }
 
         private void Start()
@@ -93,11 +128,45 @@ namespace Wanderer
                 HandleFiring();                                // left click: one shot per press
             }
 
+            UpdateAim();                                       // right click: zoom the scope
+
             if (muzzleFlash != null && Time.time >= flashOffAt)
             {
                 muzzleFlash.enabled = false;
                 if (tracer != null) tracer.enabled = false;
             }
+        }
+
+        // ---------------------------------------------------------------- aim / scope
+
+        /// <summary>
+        /// Blend the scope in while the aim button is held: zoom the camera's field of view,
+        /// steady the handheld shake, and raise <see cref="AimBlend"/> (which also scales look
+        /// sensitivity and drives the HUD reticle). Smoothing is exponential so it's framerate
+        /// independent and eases rather than snaps.
+        /// </summary>
+        private void UpdateAim()
+        {
+            IsAiming = HasGun && AimInputHeld();
+
+            float target = IsAiming ? 1f : 0f;
+            AimBlend = Mathf.Lerp(AimBlend, target, 1f - Mathf.Exp(-aimLerpSpeed * Time.deltaTime));
+            if (AimBlend < 0.001f) AimBlend = 0f;
+
+            if (vcam != null)
+                vcam.Lens.FieldOfView = Mathf.Lerp(hipFieldOfView, aimFieldOfView, AimBlend);
+            if (vcamNoise != null)
+                vcamNoise.AmplitudeGain = baseNoiseAmplitude * (1f - 0.85f * AimBlend);
+        }
+
+        /// <summary>Right mouse (or a gamepad's left trigger) holds the scope open.</summary>
+        private static bool AimInputHeld()
+        {
+            var mouse = Mouse.current;
+            if (mouse != null && mouse.rightButton.isPressed) return true;
+            var pad = Gamepad.current;
+            if (pad != null && pad.leftTrigger.ReadValue() > 0.5f) return true;
+            return false;
         }
 
         // ---------------------------------------------------------------- pickup
@@ -176,7 +245,6 @@ namespace Wanderer
         private void HandleFiring()
         {
             // Holding a gun = always in the ready/aim pose. Drives the Animator's pistol layer.
-            IsAiming = true;
             if (animator != null) animator.SetBool(AimingHash, true);
 
             // ONE shot per press. We fire only when the press counter grows — so holding the
@@ -206,7 +274,12 @@ namespace Wanderer
 
                 var target = hit.collider.GetComponentInParent<ShootingTarget>();
                 if (target != null) { target.Hit(hit.point, dir); TargetHits++; }
-                else SpawnSpark(hit.point, hit.normal);
+                else
+                {
+                    var sheep = hit.collider.GetComponentInParent<Sheep>();
+                    if (sheep != null && sheep.Hit(hit.point, dir)) LastSheepHitTime = Time.time;
+                    else SpawnSpark(hit.point, hit.normal);
+                }
             }
 
             ShowMuzzleEffects(endPoint);

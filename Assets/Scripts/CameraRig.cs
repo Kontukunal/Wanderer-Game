@@ -24,10 +24,13 @@ namespace Wanderer
         [SerializeField] private bool lockCursor = true;
 
         private CinemachineInputAxisController input;
+        private WeaponController weapon;
+        private float lastScale = 1f;
 
         private void Awake()
         {
             input = GetComponent<CinemachineInputAxisController>();
+            weapon = Object.FindFirstObjectByType<WeaponController>();
             ApplySensitivity();
         }
 
@@ -45,6 +48,14 @@ namespace Wanderer
 
         private void Update()
         {
+            // Ease look sensitivity down while the player is scoped in, for finer aim.
+            float scale = weapon != null ? weapon.LookSensitivityScale : 1f;
+            if (!Mathf.Approximately(scale, lastScale))
+            {
+                ApplySensitivity(scale);
+                lastScale = scale;
+            }
+
             if (!lockCursor) return;
 
             // This project is Input System-only, so the legacy UnityEngine.Input class throws.
@@ -60,13 +71,13 @@ namespace Wanderer
                 SetCursor(true);
         }
 
-        private void ApplySensitivity()
+        private void ApplySensitivity(float scale = 1f)
         {
             foreach (var c in input.Controllers)
             {
                 if (!c.Enabled || c.Name.Contains("Scale")) continue;   // radial axis is the zoom; leave it off
                 bool isPitch = c.Name.EndsWith("Y") || c.Name.Contains("Vertical");
-                float sens = isPitch ? verticalSensitivity : horizontalSensitivity;
+                float sens = (isPitch ? verticalSensitivity : horizontalSensitivity) * scale;
                 // Preserve the sign — pitch is inverted at build time so up looks up.
                 c.Input.Gain = Mathf.Sign(c.Input.Gain) * sens;
             }
