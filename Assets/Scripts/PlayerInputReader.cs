@@ -14,6 +14,19 @@ namespace Wanderer
         public Vector2 Look { get; private set; }
         public bool SprintHeld { get; private set; }
 
+        /// <summary>Held state of fire (Attack). True while the button is down.</summary>
+        public bool FireHeld { get; private set; }
+
+        /// <summary>
+        /// Monotonic count of fire (Attack) presses. A consumer stores the value it last acted
+        /// on and fires again only when this grows — so exactly one shot per press, immune to
+        /// frame ordering and to a "held" state whose release event got dropped.
+        /// </summary>
+        public int FirePressCount { get; private set; }
+
+        /// <summary>Monotonic count of Interact (E) presses. Same one-per-press contract.</summary>
+        public int InteractPressCount { get; private set; }
+
         /// <summary>True only on the frame jump was pressed. Consumed by the controller.</summary>
         public bool JumpQueued { get; private set; }
 
@@ -22,7 +35,9 @@ namespace Wanderer
 
         private float jumpQueuedAt = float.NegativeInfinity;
 
-        // Invoked by PlayerInput in "Send Messages" mode.
+        // Invoked by PlayerInput in "Send Messages" mode. These callbacks run outside Update,
+        // but incrementing a counter is order-independent — no flag can be read-then-cleared
+        // in the wrong sequence.
         private void OnMove(InputValue v) => Move = v.Get<Vector2>();
         private void OnLook(InputValue v) => Look = v.Get<Vector2>();
         private void OnSprint(InputValue v) => SprintHeld = v.isPressed;
@@ -30,6 +45,17 @@ namespace Wanderer
         private void OnJump(InputValue v)
         {
             if (v.isPressed) jumpQueuedAt = Time.time;
+        }
+
+        private void OnAttack(InputValue v)
+        {
+            FireHeld = v.isPressed;
+            if (v.isPressed) FirePressCount++;   // one increment per genuine press edge
+        }
+
+        private void OnInteract(InputValue v)
+        {
+            if (v.isPressed) InteractPressCount++;
         }
 
         private void Update()

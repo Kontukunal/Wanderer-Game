@@ -33,22 +33,28 @@ namespace Wanderer
 
         private void OnEnable()
         {
-            if (lockCursor) SetCursor(true);
+            // Deliberately do NOT lock on start. In the editor the Game view often lacks
+            // keyboard focus at Play, so locking immediately swallows the cursor before the
+            // player has clicked in — and their first key presses (like E) go nowhere. Instead
+            // we lock on the first click INTO the view, which also grants it focus. From then
+            // on E, movement and firing all route correctly.
+            SetCursor(false);
         }
 
         private void OnDisable() => SetCursor(false);
 
         private void Update()
         {
-            // Escape releases the mouse so you can get back to the Editor; clicking re-grabs it.
-            // This project is Input System-only, so the legacy UnityEngine.Input class throws.
             if (!lockCursor) return;
 
+            // This project is Input System-only, so the legacy UnityEngine.Input class throws.
             var keyboard = UnityEngine.InputSystem.Keyboard.current;
             var mouse = UnityEngine.InputSystem.Mouse.current;
 
+            // Escape releases the mouse so you can get back to the Editor.
             if (keyboard != null && keyboard.escapeKey.wasPressedThisFrame)
                 SetCursor(false);
+            // First/any click while unlocked engages mouselook (and gives the view focus).
             else if (mouse != null && Cursor.lockState != CursorLockMode.Locked
                      && mouse.leftButton.wasPressedThisFrame)
                 SetCursor(true);
